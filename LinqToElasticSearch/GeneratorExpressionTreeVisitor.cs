@@ -13,12 +13,14 @@ namespace LinqToElasticSearch
     public class GeneratorExpressionTreeVisitor<T>: ThrowingExpressionVisitor
     {
         private List<QueryContainer> _queryContainers = new List<QueryContainer>();
+        private List<QueryContainer> _tempQueryContainers = new List<QueryContainer>();
         private readonly PropertyNameInferrerParser _propertyNameInferrerParser;
         private bool Not { get; set; }
         private string PropertyName { get; set; }
         private object Value { get; set; }
         private ExpressionType? NodeType { get; set; }
         private Type PropertyType { get; set; }
+        private bool IsSubTerm { get; set; } = false;
 
 
         public GeneratorExpressionTreeVisitor(PropertyNameInferrerParser propertyNameInferrerParser)
@@ -41,8 +43,11 @@ namespace LinqToElasticSearch
 
         protected override Expression VisitBinary(BinaryExpression expression)
         {
-            NodeType = expression.NodeType;
+            
+            //var expression = ConvertExpressionWithParantheses(binaryExpression);
+            var isSubTerm = CheckIfSubTermExpression(expression);
 
+            NodeType = expression.NodeType;
             Visit(expression.Left);
             Visit(expression.Right);
 
@@ -50,7 +55,7 @@ namespace LinqToElasticSearch
             {
                 if (expression.NodeType == ExpressionType.Equal)
                 {
-                    _queryContainers.Add(new BoolQuery()
+                    _tempQueryContainers.Add(new BoolQuery()
                     {
                         MustNot = new QueryContainer[]
                         {
@@ -63,7 +68,7 @@ namespace LinqToElasticSearch
                 }
                 if (expression.NodeType == ExpressionType.NotEqual)
                 {
-                    _queryContainers.Add(new BoolQuery()
+                    _tempQueryContainers.Add(new BoolQuery()
                     {
                         Must = new QueryContainer[]
                         {
@@ -76,10 +81,9 @@ namespace LinqToElasticSearch
                 }
             }
             
-            
             if (PropertyType.IsEnum)
             {
-                VisitEnumProperty(expression.NodeType);
+                VisitEnumProperty(expression.NodeType, _tempQueryContainers);
             }
             else
             {
@@ -89,7 +93,11 @@ namespace LinqToElasticSearch
                         VisitDateProperty(expression.NodeType);
                         break;
                     case bool _:
-                        VisitBoolProperty(expression.NodeType);
+                        var query = VisitBoolProperty(expression.NodeType);
+                        if (isSubTerm)
+                        {
+                            _tempQueryContainers.Add(query);
+                        }
                         break;
                     case int _:
                     case long _:
@@ -104,8 +112,15 @@ namespace LinqToElasticSearch
                         break;
                 }
             }
-          
-            
+
+            if (isSubTerm == false && _tempQueryContainers.Any())
+            {
+                _queryContainers.Add(new BoolQuery
+                {
+                    Must = _tempQueryContainers
+                });
+                _tempQueryContainers = new List<QueryContainer>();
+            }
             return expression;
         }
 
@@ -149,71 +164,95 @@ namespace LinqToElasticSearch
 
         public List<QueryContainer> ShouldList = new List<QueryContainer>();
 
-        private void VisitNumericProperty(ExpressionType expressionType)
+        private IQuery VisitNumericProperty(ExpressionType expressionType)
         {
             double.TryParse(Value.ToString(), out var doubleValue);
+           
             switch (expressionType)
             {
                 case ExpressionType.Equal:
-                    _queryContainers.Add(new TermQuery()
+                    return new BoolQuery
                     {
-                        Field = PropertyName,
-                        Name = PropertyName,
-                        Value = doubleValue
-                    });
-                    // _queryContainers.Add(new MatchQuery()
-                    // {
-                    //     Field = Property,
-                    //     Query = doubleValue.ToString()
-                    // });
-                    break;
+                        Must = new QueryContainer[]
+                        {
+                            new TermQuery
+                            {
+                                Field = PropertyName,
+                                Name = PropertyName,
+                                Value = doubleValue
+                            }
+                        }
+                    };
                 
                 case ExpressionType.NotEqual:
-                    _queryContainers.Add(new BoolQuery()
+                    return new BoolQuery
                     {
-                        MustNot =new QueryContainer[]{ new TermQuery()
+                        MustNot = new QueryContainer[]
                         {
-                            Field = PropertyName,
-                            Name = PropertyName,
-                            Value = doubleValue
-                        }}
-                    } );
-                    break;
+                            new TermQuery
+                            {
+                                Field = PropertyName,
+                                Name = PropertyName,
+                                Value = doubleValue
+                            }
+                        }
+                    };
+                
                 case ExpressionType.GreaterThan:
-                    _queryContainers.Add(new NumericRangeQuery()
+                    return new BoolQuery
                     {
-                        Field = PropertyName,
-                        Name = PropertyName,
-                        GreaterThan = doubleValue
-                    });
-                    break;
+                        Must = new QueryContainer[]
+                        {
+                            new NumericRangeQuery
+                            {
+                                Field = PropertyName,
+                                Name = PropertyName,
+                                GreaterThan = doubleValue
+                            }
+                        }
+                    };
                 
                 case ExpressionType.GreaterThanOrEqual:
-                    _queryContainers.Add(new NumericRangeQuery()
+                    return new BoolQuery
                     {
-                        Field = PropertyName,
-                        Name = PropertyName,
-                        GreaterThanOrEqualTo = doubleValue
-                    });
-                    break;
+                        Must = new QueryContainer[]
+                        {
+                            new NumericRangeQuery
+                            {
+                                Field = PropertyName,
+                                Name = PropertyName,
+                                GreaterThanOrEqualTo = doubleValue
+                            }
+                        }
+                    };
                 
                 case ExpressionType.LessThan:
-                    _queryContainers.Add(new NumericRangeQuery()
+                    return new BoolQuery
                     {
-                        Field = PropertyName,
-                        Name = PropertyName,
-                        LessThan = doubleValue
-                    });
-                    break;
+                        Must = new QueryContainer[]
+                        {
+                            new NumericRangeQuery
+                            {
+                                Field = PropertyName,
+                                Name = PropertyName,
+                                LessThan = doubleValue
+                            }
+                        }
+                    };
                 
                 case ExpressionType.LessThanOrEqual:
-                    _queryContainers.Add(new NumericRangeQuery()
+                    return new BoolQuery
                     {
-                        Field = PropertyName,
-                        Name = PropertyName,
-                        LessThanOrEqualTo = doubleValue
-                    });
-                    break;
+                        Must = new QueryContainer[]
+                        {
+                            new NumericRangeQuery
+                            {
+                                Field = PropertyName,
+                                Name = PropertyName,
+                                LessThanOrEqualTo = doubleValue
+                            }
+                        }
+                    };
                 case ExpressionType.OrElse:
                     var qc = (new BoolQuery()
                     {
@@ -223,14 +262,16 @@ namespace LinqToElasticSearch
                     _queryContainers.Add(qc);
                     break;
             }
+
+            return null;
         }
         
-        private void VisitEnumProperty(ExpressionType expressionType)
+        private void VisitEnumProperty(ExpressionType expressionType, List<QueryContainer> _tempQueryContainers)
         {
             switch (expressionType)
             {
                 case ExpressionType.Equal:
-                    _queryContainers.Add(new TermQuery()
+                    _tempQueryContainers.Add(new TermQuery()
                     {
                         Field = PropertyName,
                         Name = PropertyName,
@@ -239,7 +280,7 @@ namespace LinqToElasticSearch
                     break;
                 
                 case ExpressionType.NotEqual:
-                    _queryContainers.Add(new BoolQuery()
+                    _tempQueryContainers.Add(new BoolQuery()
                     {
                         MustNot = new QueryContainer[]{new TermQuery()
                         {
@@ -252,37 +293,49 @@ namespace LinqToElasticSearch
             }
         }
 
-        private void VisitBoolProperty(ExpressionType expressionNodeType)
+        private QueryContainer VisitBoolProperty(ExpressionType expressionNodeType)
         {
             if (Value is bool boolValue)
                 switch (expressionNodeType)
                 {
                     case ExpressionType.Equal:
-                        _queryContainers.Add(new TermQuery()
+                        return new BoolQuery
                         {
-                            Field = PropertyName,
-                            Name = PropertyName,
-                            Value = boolValue
-                        });
-                        break;
+                            Must = new QueryContainer[]
+                            {
+                                new TermQuery
+                                {
+                                    Field = PropertyName,
+                                    Name = PropertyName,
+                                    Value = boolValue
+                                }
+                            }
+                        };
                     case ExpressionType.NotEqual:
                     case ExpressionType.Not:
-                        _queryContainers.Add(new TermQuery()
+                        return new BoolQuery
                         {
-                            Field = PropertyName,
-                            Name = PropertyName,
-                            Value = !boolValue
-                        }); 
-                        break;
+                            Must = new QueryContainer[]
+                            {
+                                new TermQuery
+                                {
+                                    Field = PropertyName,
+                                    Name = PropertyName,
+                                    Value = !boolValue
+                                }
+                            }
+                        };
                     case ExpressionType.OrElse:
-                        var qc = (new BoolQuery()
+                        var qc = new BoolQuery
                         {
                             Should = new[]{ _queryContainers[0], _queryContainers[1]}
-                        }); 
+                        }; 
                         _queryContainers.Clear();
                         _queryContainers.Add(qc);
                         break;
                 }
+
+            return null;
         }
 
         private void VisitDateProperty(ExpressionType expressionNodeType)
@@ -465,7 +518,7 @@ namespace LinqToElasticSearch
             if (query != null) 
                 if (Not)
                 {
-                    _queryContainers.Add(new BoolQuery()
+                    _tempQueryContainers.Add(new BoolQuery()
                     {
                         MustNot = new[]{query}
                     });
@@ -473,7 +526,7 @@ namespace LinqToElasticSearch
                 }
                 else
                 {
-                    _queryContainers.Add(query);
+                    _tempQueryContainers.Add(query);
                 }
         }
 
@@ -546,6 +599,28 @@ namespace LinqToElasticSearch
             var message = string.Format("The expression '{0}' (type: {1}) is not supported by this LINQ provider.",
                 itemText, typeof(T));
             return new NotSupportedException(message);
+        }
+
+        private BinaryExpression ConvertExpressionWithParantheses(BinaryExpression expression)
+        {
+            var expressionChars = expression.ToString().ToCharArray();
+            var hasParantheses = expressionChars[0] == '(' && expressionChars[expressionChars.Length - 1] == ')' ;
+
+            if (hasParantheses && Value == null && NodeType == ExpressionType.OrElse)
+            {
+                
+                return BinaryExpression.Equal(expression, Expression.Constant(true));
+            }
+
+            return expression;
+        }
+        
+        private bool CheckIfSubTermExpression(BinaryExpression expression)
+        {
+            var expressionChars = expression.ToString().ToCharArray();
+            var hasParantheses = expressionChars[0] == '(' && expressionChars[expressionChars.Length - 1] == ')' ;
+
+            return hasParantheses && Value == null && expression.IsLifted;
         }
     }
 }

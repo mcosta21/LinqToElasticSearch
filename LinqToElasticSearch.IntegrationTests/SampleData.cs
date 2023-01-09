@@ -14,6 +14,10 @@ namespace LinqToElasticSearch.IntegrationTests
         
         public DateTime? Date1 { get; set; }
         
+        public Guid? FolderId { get; set; }
+        
+        public Guid TypeId { get; set; }
+        
         public SampleType SampleTypeProperty { get; set; }
         
         [StringEnum]
